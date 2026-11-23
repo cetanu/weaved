@@ -2,7 +2,7 @@ import inspect
 from collections import UserDict
 
 import pytest
-from weave import merge
+from weave import CONCAT_LISTS, NONE, TYPESAFE, MergeFlag, merge
 
 
 def test_nested_merge():
@@ -23,7 +23,7 @@ def test_empty_inputs(left, right):
     assert result is not right
 
 
-@pytest.mark.parametrize("concat_lists", [False, True])
+@pytest.mark.parametrize("flags", [NONE, CONCAT_LISTS])
 @pytest.mark.parametrize(
     "left,right,expected",
     [
@@ -39,15 +39,15 @@ def test_empty_inputs(left, right):
         ({"x": {1}}, {"x": {2}}, {"x": {2}}),
     ],
 )
-def test_conflicts(left, right, expected, concat_lists):
-    assert merge(left, right, concat_lists=concat_lists) == expected
+def test_conflicts(left, right, expected, flags):
+    assert merge(left, right, flags=flags) == expected
 
 
 def test_lists_replace_by_default_and_concatenate_at_every_dict_depth():
     left = {"x": [1, 1], "nested": {"y": [2], "z": []}}
     right = {"x": [1, 3], "nested": {"y": [], "z": [4]}}
     assert merge(left, right) == right
-    assert merge(left, right, concat_lists=True) == {
+    assert merge(left, right, flags=CONCAT_LISTS) == {
         "x": [1, 1, 1, 3],
         "nested": {"y": [2], "z": [4]},
     }
@@ -56,11 +56,11 @@ def test_lists_replace_by_default_and_concatenate_at_every_dict_depth():
 def test_list_elements_are_not_merged_by_index():
     left = {"x": [{"a": 1}, [1]]}
     right = {"x": [{"b": 2}, [2]]}
-    assert merge(left, right, concat_lists=True) == {"x": [{"a": 1}, [1], {"b": 2}, [2]]}
+    assert merge(left, right, flags=CONCAT_LISTS) == {"x": [{"a": 1}, [1], {"b": 2}, [2]]}
 
 
-@pytest.mark.parametrize("concat_lists", [False, True])
-def test_all_surviving_containers_are_independent(concat_lists):
+@pytest.mark.parametrize("flags", [NONE, CONCAT_LISTS])
+def test_all_surviving_containers_are_independent(flags):
     left = {
         "untouched": {"items": [{"values": [1]}]},
         "merged": {"left": [2]},
@@ -71,7 +71,7 @@ def test_all_surviving_containers_are_independent(concat_lists):
         "merged": {"right": [5]},
         "conflict": [{"values": [6]}],
     }
-    result = merge(left, right, concat_lists=concat_lists)
+    result = merge(left, right, flags=flags)
     result["untouched"]["items"][0]["values"].append(7)
     result["merged"]["left"].append(8)
     result["merged"]["right"].append(9)
@@ -152,7 +152,7 @@ def test_container_subclasses_use_stored_contents():
 
     left = DictSubclass(x=DictSubclass(a=1), items=ListSubclass([DictSubclass(a=1)]))
     right = DictSubclass(x=DictSubclass(b=2), items=ListSubclass([ListSubclass([2])]))
-    result = merge(left, right, concat_lists=True)
+    result = merge(left, right, flags=CONCAT_LISTS)
     assert result == {"x": {"a": 1, "b": 2}, "items": [{"a": 1}, [2]]}
     assert type(result) is dict
     assert type(result["x"]) is dict
@@ -161,15 +161,15 @@ def test_container_subclasses_use_stored_contents():
     assert type(result["items"][1]) is list
 
 
-@pytest.mark.parametrize("concat_lists", [False, True])
-def test_same_input_is_safe(concat_lists):
+@pytest.mark.parametrize("flags", [NONE, CONCAT_LISTS])
+def test_same_input_is_safe(flags):
     source = {"nested": {"items": [{"a": 1}]}}
-    result = merge(source, source, concat_lists=concat_lists)
-    count = 2 if concat_lists else 1
+    result = merge(source, source, flags=flags)
+    count = 2 if flags & CONCAT_LISTS else 1
     assert result == {"nested": {"items": [{"a": 1}] * count}}
     result["nested"]["items"][0]["a"] = 2
     assert source == {"nested": {"items": [{"a": 1}]}}
-    if concat_lists:
+    if flags & CONCAT_LISTS:
         assert result["nested"]["items"][1] == {"a": 1}
 
 
@@ -199,15 +199,80 @@ def test_keyword_only_options_and_inspectable_signature():
     with pytest.raises(TypeError):
         merge({}, {}, unknown=True)
     signature = inspect.signature(merge)
-    assert list(signature.parameters) == ["dicts", "concat_lists"]
+    assert list(signature.parameters) == ["dicts", "flags"]
     assert signature.parameters["dicts"].kind == inspect.Parameter.VAR_POSITIONAL
-    assert signature.parameters["concat_lists"].kind == inspect.Parameter.KEYWORD_ONLY
-    assert signature.parameters["concat_lists"].default is False
+    assert signature.parameters["flags"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["flags"].default == 0
+
+
+def test_flags_values_and_validation():
+    assert MergeFlag.NONE == 0o0
+    assert MergeFlag.CONCAT_LISTS == 0o1
+    assert MergeFlag.TYPESAFE == 0o2
+    assert (CONCAT_LISTS | TYPESAFE) == 0o3
+    for bad in (-1, 0o4, 0o10, 99):
+        with pytest.raises(ValueError, match="invalid merge flags"):
+            merge({}, {}, flags=bad)
+    with pytest.raises(TypeError):
+        merge({}, {}, flags="typesafe")
+
+
+def test_typesafe_matching_and_conflicting_types():
+    left = {"a": 1, "b": [1], "nested": {"x": "old", "y": None}, "only_left": 10}
+    right = {"a": 2, "b": [2], "nested": {"x": "new", "y": None}, "only_right": "ok"}
+
+    assert merge(left, right, flags=TYPESAFE) == {
+        "a": 2,
+        "b": [2],
+        "nested": {"x": "new", "y": None},
+        "only_left": 10,
+        "only_right": "ok",
+    }
+    assert merge(left, right, flags=TYPESAFE | CONCAT_LISTS) == {
+        "a": 2,
+        "b": [1, 2],
+        "nested": {"x": "new", "y": None},
+        "only_left": 10,
+        "only_right": "ok",
+    }
+
+    for a, b in (
+        ({"x": 1}, {"x": "1"}),
+        ({"x": 1}, {"x": True}),
+        ({"x": {"a": 1}}, {"x": None}),
+        ({"x": [1]}, {"x": (1,)}),
+        ({"nested": {"k": 1}}, {"nested": {"k": 1.0}}),
+    ):
+        with pytest.raises(TypeError, match="conflicting types"):
+            merge(a, b, flags=TYPESAFE)
+
+    # Wide dicts (>= 8 keys) must also check types rather than bulk-updating.
+    wide_left = {f"k{i}": i for i in range(16)}
+    wide_right = {f"k{i}": i for i in range(16)}
+    wide_right["k15"] = "mismatch"
+    with pytest.raises(TypeError, match="conflicting types"):
+        merge(wide_left, wide_right, flags=TYPESAFE)
+
+
+def test_typesafe_variadic():
+    assert merge(
+        {"a": 1, "items": [1], "nested": {"x": 1}},
+        {"a": 2, "items": [2], "nested": {"y": 2}},
+        {"a": 3, "items": [3], "nested": {"x": 4}},
+        flags=TYPESAFE | CONCAT_LISTS,
+    ) == {"a": 3, "items": [1, 2, 3], "nested": {"x": 4, "y": 2}}
+
+    # Type mismatch in a middle layer must still raise even if the last layer matches the first.
+    with pytest.raises(TypeError, match="conflicting types"):
+        merge({"x": 1}, {"x": "bad"}, {"x": 2}, flags=TYPESAFE)
+
+    assert merge(flags=TYPESAFE) == {}
+    assert merge({"x": 1}, flags=TYPESAFE) == {"x": 1}
 
 
 def test_zero_and_single_dict_inputs():
     assert merge() == {}
-    assert merge(concat_lists=True) == {}
+    assert merge(flags=CONCAT_LISTS) == {}
 
     class DictSubclass(dict):
         pass
@@ -253,7 +318,7 @@ def test_variadic_merge_nested_lists_and_overrides():
         "keep": "base",
         "env_only": {"x": [1]},
     }
-    result = merge(defaults, env, cli, concat_lists=True)
+    result = merge(defaults, env, cli, flags=CONCAT_LISTS)
     assert result["plugins"] == ["logging", "auth", "metrics"]
     result["env_only"]["x"].append(2)
     assert env["env_only"]["x"] == [1]
@@ -261,15 +326,15 @@ def test_variadic_merge_nested_lists_and_overrides():
 
 def test_variadic_non_contiguous_and_broken_chains():
     assert merge({"x": {"a": 1}}, {}, {"x": {"b": 2}}) == {"x": {"a": 1, "b": 2}}
-    assert merge({"x": [1]}, {}, {"x": [2]}, {"x": [3]}, concat_lists=True) == {"x": [1, 2, 3]}
-    assert merge({"x": [1]}, {"x": None}, {"x": [2]}, {"x": [3]}, concat_lists=True) == {
+    assert merge({"x": [1]}, {}, {"x": [2]}, {"x": [3]}, flags=CONCAT_LISTS) == {"x": [1, 2, 3]}
+    assert merge({"x": [1]}, {"x": None}, {"x": [2]}, {"x": [3]}, flags=CONCAT_LISTS) == {
         "x": [2, 3]
     }
     # Nested containers inside 3+ concatenated lists are independent copies.
     a = {"x": [{"v": [1]}]}
     b = {"x": [{"v": [2]}]}
     c = {"x": [{"v": [3]}]}
-    merged = merge(a, b, c, concat_lists=True)
+    merged = merge(a, b, c, flags=CONCAT_LISTS)
     assert merged == {"x": [{"v": [1]}, {"v": [2]}, {"v": [3]}]}
     for item in merged["x"]:
         item["v"].clear()
@@ -312,16 +377,16 @@ def test_variadic_container_subclasses_in_lists():
         {"x": ListSubclass([1])},
         {"x": ListSubclass([2])},
         {"x": ListSubclass([3])},
-        concat_lists=True,
+        flags=CONCAT_LISTS,
     )
     assert result == {"x": [1, 2, 3]}
     assert type(result["x"]) is list
 
 
-@pytest.mark.parametrize("concat_lists", [False, True])
+@pytest.mark.parametrize("flags", [NONE, CONCAT_LISTS])
 @pytest.mark.parametrize("kind", ["dict", "list", "mixed"])
 @pytest.mark.parametrize("side", ["left", "right", "both"])
-def test_cycles_raise_and_subsequent_merges_work(concat_lists, kind, side):
+def test_cycles_raise_and_subsequent_merges_work(flags, kind, side):
     if kind == "dict":
         cyclic = {}
         cyclic["self"] = cyclic
@@ -334,7 +399,7 @@ def test_cycles_raise_and_subsequent_merges_work(concat_lists, kind, side):
     left = {"x": cyclic} if side in ("left", "both") else {}
     right = {"x": cyclic} if side in ("right", "both") else {}
     with pytest.raises(RecursionError):
-        merge(left, right, concat_lists=concat_lists)
+        merge(left, right, flags=flags)
     assert merge({"x": {"a": 1}}, {"x": {"b": 2}}) == {"x": {"a": 1, "b": 2}}
 
 

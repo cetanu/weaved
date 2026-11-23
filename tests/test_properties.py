@@ -1,8 +1,9 @@
 from copy import deepcopy
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from weave import merge
+from weave import CONCAT_LISTS, NONE, TYPESAFE, merge
 
 keys = st.one_of(st.text(max_size=10), st.integers(), st.none())
 leaves = st.one_of(st.none(), st.booleans(), st.integers(), st.floats(), st.text(), st.binary())
@@ -14,32 +15,45 @@ values = st.recursive(
     max_leaves=40,
 )
 dicts = st.dictionaries(keys, values, max_size=8)
+flag_choices = st.sampled_from([NONE, CONCAT_LISTS, TYPESAFE, CONCAT_LISTS | TYPESAFE])
 
 
-def reference_merge(left, right, concat_lists):
+def reference_merge(left, right, flags):
     """An intentionally straightforward oracle for acyclic built-in values."""
+    concat_lists = bool(flags & CONCAT_LISTS)
+    typesafe = bool(flags & TYPESAFE)
     result = deepcopy(left)
     for key, value in right.items():
-        previous = left.get(key)
-        if isinstance(previous, dict) and isinstance(value, dict):
-            result[key] = reference_merge(previous, value, concat_lists)
-        elif concat_lists and isinstance(previous, list) and isinstance(value, list):
-            result[key] = deepcopy(previous + value)
+        if key in left:
+            previous = left[key]
+            if typesafe and type(previous) is not type(value):
+                raise TypeError("conflicting types")
+            if isinstance(previous, dict) and isinstance(value, dict):
+                result[key] = reference_merge(previous, value, flags)
+            elif concat_lists and isinstance(previous, list) and isinstance(value, list):
+                result[key] = deepcopy(previous + value)
+            else:
+                result[key] = deepcopy(value)
         else:
             result[key] = deepcopy(value)
     return result
 
 
 @settings(max_examples=300)
-@given(left=dicts, right=dicts, concat_lists=st.booleans())
-def test_matches_reference_and_preserves_input_container_identities(left, right, concat_lists):
-    expected = reference_merge(left, right, concat_lists)
+@given(left=dicts, right=dicts, flags=flag_choices)
+def test_matches_reference_and_preserves_input_container_identities(left, right, flags):
     left_before, right_before = deepcopy(left), deepcopy(right)
     left_ids = container_ids(left)
     right_ids = container_ids(right)
-    result = merge(left, right, concat_lists=concat_lists)
-    assert equivalent(result, expected)
-    assert container_ids(result).isdisjoint(left_ids | right_ids)
+    try:
+        expected = reference_merge(left, right, flags)
+    except TypeError:
+        with pytest.raises(TypeError):
+            merge(left, right, flags=flags)
+    else:
+        result = merge(left, right, flags=flags)
+        assert equivalent(result, expected)
+        assert container_ids(result).isdisjoint(left_ids | right_ids)
     assert container_ids(left) == left_ids
     assert container_ids(right) == right_ids
     assert equivalent(left, left_before)
@@ -49,16 +63,21 @@ def test_matches_reference_and_preserves_input_container_identities(left, right,
 
 
 @settings(max_examples=200)
-@given(layers=st.lists(dicts, min_size=0, max_size=5), concat_lists=st.booleans())
-def test_variadic_matches_left_fold_reference(layers, concat_lists):
-    expected = {}
-    for layer in layers:
-        expected = reference_merge(expected, layer, concat_lists)
+@given(layers=st.lists(dicts, min_size=0, max_size=5), flags=flag_choices)
+def test_variadic_matches_left_fold_reference(layers, flags):
     before = [deepcopy(layer) for layer in layers]
     input_ids = set().union(*(container_ids(layer) for layer in layers)) if layers else set()
-    result = merge(*layers, concat_lists=concat_lists)
-    assert equivalent(result, expected)
-    assert container_ids(result).isdisjoint(input_ids)
+    try:
+        expected = {}
+        for layer in layers:
+            expected = reference_merge(expected, layer, flags)
+    except TypeError:
+        with pytest.raises(TypeError):
+            merge(*layers, flags=flags)
+    else:
+        result = merge(*layers, flags=flags)
+        assert equivalent(result, expected)
+        assert container_ids(result).isdisjoint(input_ids)
     for layer, snapshot in zip(layers, before, strict=True):
         assert equivalent(layer, snapshot)
 

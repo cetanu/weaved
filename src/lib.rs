@@ -7,18 +7,22 @@ use pyo3::types::{PyDict, PyTuple};
 /// Deeply merge zero or more dictionaries into a new dictionary.
 ///
 /// Nested dictionaries merge recursively from left to right. Other conflicts
-/// take the rightmost value; with concat_lists=True, consecutive lists
-/// concatenate in left-to-right order. Dicts and lists in the result are
-/// independent of the inputs. Keys and all other values retain their identity.
-/// Container subclasses become plain dicts and lists. Cycles and excessive
-/// nesting raise RecursionError.
+/// take the rightmost value. Pass `flags` (bitmask of `MergeFlag` values) to
+/// customize behavior:
+/// - `CONCAT_LISTS` (0o1): concatenate consecutive lists in left-to-right order.
+/// - `TYPESAFE` (0o2): raise TypeError when conflicting values have different types.
+///
+/// Dicts and lists in the result are independent of the inputs. Keys and all
+/// other values retain their identity. Container subclasses become plain dicts
+/// and lists. Cycles and excessive nesting raise RecursionError.
 #[pyfunction]
-#[pyo3(name = "merge", signature = (*dicts, concat_lists=false))]
+#[pyo3(name = "merge", signature = (*dicts, flags=0))]
 fn py_merge<'py>(
     py: Python<'py>,
     dicts: &Bound<'py, PyTuple>,
-    concat_lists: bool,
+    flags: i64,
 ) -> PyResult<Bound<'py, PyDict>> {
+    let options = merge::MergeOptions::from_flags(flags)?;
     match dicts.len() {
         0 => Ok(PyDict::new(py)),
         1 => {
@@ -28,14 +32,14 @@ fn py_merge<'py>(
         2 => {
             let left = dicts.get_item(0)?.cast_into::<PyDict>()?;
             let right = dicts.get_item(1)?.cast_into::<PyDict>()?;
-            merge::merge_dicts(&left, &right, concat_lists, 0)
+            merge::merge_dicts(&left, &right, options, 0)
         }
         _ => {
             let mut extracted = Vec::with_capacity(dicts.len());
             for item in dicts.iter() {
                 extracted.push(item.cast_into::<PyDict>()?);
             }
-            merge::merge_many(&extracted, concat_lists, 0)
+            merge::merge_many(&extracted, options, 0)
         }
     }
 }

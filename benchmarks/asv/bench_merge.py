@@ -2,19 +2,17 @@ from dataclasses import dataclass
 
 from mergedeep import Strategy
 from mergedeep import merge as _mergedeep_merge
-from weave import merge
+from weave import CONCAT_LISTS, NONE, TYPESAFE, merge
 
 
 @dataclass
 class BenchCase:
     name: str
     inputs: tuple[dict, ...]
+    flags: int = NONE
 
     def __call__(self):
-        return self.inputs, self.name in CONCAT_LIST_CASES
-
-
-CONCAT_LIST_CASES = {"nested_concat", "list_concat", "container_lists", "multi_nested_concat"}
+        return self.inputs, self.flags
 
 
 def copy_value(value):
@@ -25,35 +23,47 @@ def copy_value(value):
     return value
 
 
-def _python_merge_two(left, right, *, concat_lists=False):
+def _python_merge_two(left, right, *, flags=NONE):
+    concat_lists = bool(flags & CONCAT_LISTS)
+    typesafe = bool(flags & TYPESAFE)
     result = dict.copy(left)
     for key, value in dict.items(left):
         if isinstance(value, (dict, list)) and key not in right:
             result[key] = copy_value(value)
     for key, value in dict.items(right):
-        previous = dict.get(left, key)
-        if isinstance(previous, dict) and isinstance(value, dict):
-            result[key] = _python_merge_two(previous, value, concat_lists=concat_lists)
-        elif concat_lists and isinstance(previous, list) and isinstance(value, list):
-            result[key] = copy_value(list.__add__(previous, value))
+        if key in left:
+            previous = left[key]
+            if typesafe and type(previous) is not type(value):
+                raise TypeError(f"conflicting types for key {key!r}")
+            if isinstance(previous, dict) and isinstance(value, dict):
+                result[key] = _python_merge_two(previous, value, flags=flags)
+            elif concat_lists and isinstance(previous, list) and isinstance(value, list):
+                result[key] = copy_value(list.__add__(previous, value))
+            else:
+                result[key] = copy_value(value)
         else:
             result[key] = copy_value(value)
     return result
 
 
-def python_merge(*dicts, concat_lists=False):
+def python_merge(*dicts, flags=NONE):
     if not dicts:
         return {}
     if len(dicts) == 1:
         return copy_value(dicts[0])
-    result = _python_merge_two(dicts[0], dicts[1], concat_lists=concat_lists)
+    result = _python_merge_two(dicts[0], dicts[1], flags=flags)
     for layer in dicts[2:]:
-        result = _python_merge_two(result, layer, concat_lists=concat_lists)
+        result = _python_merge_two(result, layer, flags=flags)
     return result
 
 
-def mergedeep_merge(*dicts, concat_lists=False):
-    strategy = Strategy.ADDITIVE if concat_lists else Strategy.REPLACE
+def mergedeep_merge(*dicts, flags=NONE):
+    concat_lists = bool(flags & CONCAT_LISTS)
+    typesafe = bool(flags & TYPESAFE)
+    if typesafe:
+        strategy = Strategy.TYPESAFE_ADDITIVE if concat_lists else Strategy.TYPESAFE_REPLACE
+    else:
+        strategy = Strategy.ADDITIVE if concat_lists else Strategy.REPLACE
     return _mergedeep_merge({}, *dicts, strategy=strategy)
 
 
@@ -135,18 +145,29 @@ def cases():
             ),
         ),
         BenchCase("nested", (nested_left, nested_right)),
-        BenchCase("nested_concat", (nested_left, nested_right)),
+        BenchCase("nested_concat", (nested_left, nested_right), CONCAT_LISTS),
+        BenchCase("nested_typesafe", (nested_left, nested_right), TYPESAFE),
+        BenchCase("nested_typesafe_concat", (nested_left, nested_right), TYPESAFE | CONCAT_LISTS),
         BenchCase("multi_nested", (nested_left, nested_right, nested_layer3, nested_layer4)),
-        BenchCase("multi_nested_concat", (nested_left, nested_right, nested_layer3, nested_layer4)),
+        BenchCase(
+            "multi_nested_concat",
+            (nested_left, nested_right, nested_layer3, nested_layer4),
+            CONCAT_LISTS,
+        ),
         BenchCase("deep", (deep_source, deep_dest)),
         BenchCase("list_replace", ({"items": list(range(10_000))}, {"items": list(range(10_000))})),
-        BenchCase("list_concat", ({"items": list(range(10_000))}, {"items": list(range(10_000))})),
+        BenchCase(
+            "list_concat",
+            ({"items": list(range(10_000))}, {"items": list(range(10_000))}),
+            CONCAT_LISTS,
+        ),
         BenchCase(
             "container_lists",
             (
                 {"items": [{"id": i, "tags": [i]} for i in range(500)]},
                 {"items": [{"id": i, "tags": [i]} for i in range(500, 1_000)]},
             ),
+            CONCAT_LISTS,
         ),
         BenchCase("overwritten", ({"items": overwritten}, {"items": None})),
         BenchCase("wide_mixed_late", (wide_left, wide_right)),
@@ -174,14 +195,14 @@ def cases():
 class MergeBenchmarks:
     def setup(self):
         self.workloads = {case.name: case() for case in cases()}
-        for name, (inputs, concat_lists) in self.workloads.items():
-            expected = merge(*inputs, concat_lists=concat_lists)
-            assert expected == python_merge(*inputs, concat_lists=concat_lists), name
-            assert expected == mergedeep_merge(*inputs, concat_lists=concat_lists), name
+        for name, (inputs, flags) in self.workloads.items():
+            expected = merge(*inputs, flags=flags)
+            assert expected == python_merge(*inputs, flags=flags), name
+            assert expected == mergedeep_merge(*inputs, flags=flags), name
 
     def _run(self, workload, implementation):
-        inputs, concat_lists = self.workloads[workload]
-        return IMPLEMENTATIONS[implementation](*inputs, concat_lists=concat_lists)
+        inputs, flags = self.workloads[workload]
+        return IMPLEMENTATIONS[implementation](*inputs, flags=flags)
 
     def time_tiny_weave(self):
         self._run("tiny", "weave")
@@ -218,6 +239,24 @@ class MergeBenchmarks:
 
     def time_nested_concat_mergedeep(self):
         self._run("nested_concat", "mergedeep")
+
+    def time_nested_typesafe_weave(self):
+        self._run("nested_typesafe", "weave")
+
+    def time_nested_typesafe_python(self):
+        self._run("nested_typesafe", "python")
+
+    def time_nested_typesafe_mergedeep(self):
+        self._run("nested_typesafe", "mergedeep")
+
+    def time_nested_typesafe_concat_weave(self):
+        self._run("nested_typesafe_concat", "weave")
+
+    def time_nested_typesafe_concat_python(self):
+        self._run("nested_typesafe_concat", "python")
+
+    def time_nested_typesafe_concat_mergedeep(self):
+        self._run("nested_typesafe_concat", "mergedeep")
 
     def time_multi_nested_weave(self):
         self._run("multi_nested", "weave")

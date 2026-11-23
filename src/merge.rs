@@ -1,12 +1,55 @@
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 
 use crate::recursion::RecursionGuard;
 
+const FLAG_CONCAT_LISTS: u32 = 0o1;
+const FLAG_TYPESAFE: u32 = 0o2;
+const VALID_FLAGS: u32 = FLAG_CONCAT_LISTS | FLAG_TYPESAFE;
+
+#[derive(Clone, Copy)]
+pub(crate) struct MergeOptions {
+    pub(crate) concat_lists: bool,
+    pub(crate) typesafe: bool,
+}
+
+impl MergeOptions {
+    pub(crate) fn from_flags(flags: i64) -> PyResult<Self> {
+        if flags < 0 || (flags as u64) & !(VALID_FLAGS as u64) != 0 {
+            return Err(PyValueError::new_err(format!(
+                "invalid merge flags: {flags}"
+            )));
+        }
+        let bits = flags as u32;
+        Ok(Self {
+            concat_lists: (bits & FLAG_CONCAT_LISTS) != 0,
+            typesafe: (bits & FLAG_TYPESAFE) != 0,
+        })
+    }
+}
+
+fn check_same_type(
+    left: &Bound<'_, PyAny>,
+    right: &Bound<'_, PyAny>,
+    key: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    // SAFETY: both pointers are live Python objects under the GIL.
+    let same = unsafe { pyo3::ffi::Py_TYPE(left.as_ptr()) == pyo3::ffi::Py_TYPE(right.as_ptr()) };
+    if !same {
+        let left_type = left.get_type().qualname()?;
+        let right_type = right.get_type().qualname()?;
+        return Err(PyTypeError::new_err(format!(
+            "conflicting types for key {key:?}: cannot merge {left_type} with {right_type}"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn merge_dicts<'py>(
     left: &Bound<'py, PyDict>,
     right: &Bound<'py, PyDict>,
-    concat_lists: bool,
+    options: MergeOptions,
     depth: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     let _guard = RecursionGuard::enter(left.py(), depth)?;
@@ -20,84 +63,92 @@ pub(crate) fn merge_dicts<'py>(
         }
     }
 
-    if right.len() >= 8 {
-        let py = left.py();
-        let mut position = 0;
-        let mut key_ptr = std::ptr::null_mut();
-        let mut value_ptr = std::ptr::null_mut();
-        let mut inspected = 0;
-        let mut prefix_contains_containers = false;
-        let mut exact_string_keys = true;
-        let mut container_entries = Vec::new();
+    if !options.typesafe {
+        if right.len() >= 8 {
+            let py = left.py();
+            let mut position = 0;
+            let mut key_ptr = std::ptr::null_mut();
+            let mut value_ptr = std::ptr::null_mut();
+            let mut inspected = 0;
+            let mut prefix_contains_containers = false;
+            let mut exact_string_keys = true;
+            let mut container_entries = Vec::new();
 
-        while inspected < right.len() {
-            // SAFETY: `right` remains alive and unmodified for this scan, and
-            // the GIL is held for the full call.
-            if unsafe {
-                pyo3::ffi::PyDict_Next(right.as_ptr(), &mut position, &mut key_ptr, &mut value_ptr)
-            } == 0
-            {
-                break;
-            }
-            // SAFETY: PyDict_Next returned a live key pointer while `right`
-            // is alive and the GIL remains held.
-            if unsafe { pyo3::ffi::PyUnicode_CheckExact(key_ptr) == 0 } {
-                exact_string_keys = false;
-                break;
-            }
-
-            // SAFETY: PyDict_Next returned a live value pointer while `right`
-            // is alive and the GIL remains held.
-            let is_container = unsafe {
-                pyo3::ffi::PyDict_Check(value_ptr) != 0 || pyo3::ffi::PyList_Check(value_ptr) != 0
-            };
-            if inspected < 2 && is_container {
-                prefix_contains_containers = true;
-                break;
-            } else if is_container {
-                // SAFETY: both pointers are borrowed from the live `right` dict;
-                // the constructors increment their references for these Bounds.
-                container_entries.push(unsafe {
-                    (
-                        Bound::from_borrowed_ptr(py, key_ptr),
-                        Bound::from_borrowed_ptr(py, value_ptr),
+            while inspected < right.len() {
+                // SAFETY: `right` remains alive and unmodified for this scan, and
+                // the GIL is held for the full call.
+                if unsafe {
+                    pyo3::ffi::PyDict_Next(
+                        right.as_ptr(),
+                        &mut position,
+                        &mut key_ptr,
+                        &mut value_ptr,
                     )
-                });
-            }
-            inspected += 1;
-        }
+                } == 0
+                {
+                    break;
+                }
+                // SAFETY: PyDict_Next returned a live key pointer while `right`
+                // is alive and the GIL remains held.
+                if unsafe { pyo3::ffi::PyUnicode_CheckExact(key_ptr) == 0 } {
+                    exact_string_keys = false;
+                    break;
+                }
 
-        if !exact_string_keys || prefix_contains_containers {
-            for (key, right_value) in right.iter() {
+                // SAFETY: PyDict_Next returned a live value pointer while `right`
+                // is alive and the GIL remains held.
+                let is_container = unsafe {
+                    pyo3::ffi::PyDict_Check(value_ptr) != 0
+                        || pyo3::ffi::PyList_Check(value_ptr) != 0
+                };
+                if inspected < 2 && is_container {
+                    prefix_contains_containers = true;
+                    break;
+                } else if is_container {
+                    // SAFETY: both pointers are borrowed from the live `right` dict;
+                    // the constructors increment their references for these Bounds.
+                    container_entries.push(unsafe {
+                        (
+                            Bound::from_borrowed_ptr(py, key_ptr),
+                            Bound::from_borrowed_ptr(py, value_ptr),
+                        )
+                    });
+                }
+                inspected += 1;
+            }
+
+            if !exact_string_keys || prefix_contains_containers {
+                for (key, right_value) in right.iter() {
+                    result.set_item(
+                        &key,
+                        merge_entry(left, &key, &right_value, options, depth + 1)?,
+                    )?;
+                }
+                return Ok(result);
+            }
+
+            result.update(right.as_mapping())?;
+            for (key, right_value) in container_entries {
                 result.set_item(
                     &key,
-                    merge_entry(left, &key, &right_value, concat_lists, depth + 1)?,
+                    merge_entry(left, &key, &right_value, options, depth + 1)?,
                 )?;
             }
             return Ok(result);
+        } else if right.len() >= 4
+            && right
+                .iter()
+                .all(|(key, value)| !is_container(&value) && key.is_exact_instance_of::<PyString>())
+        {
+            result.update(right.as_mapping())?;
+            return Ok(result);
         }
-
-        result.update(right.as_mapping())?;
-        for (key, right_value) in container_entries {
-            result.set_item(
-                &key,
-                merge_entry(left, &key, &right_value, concat_lists, depth + 1)?,
-            )?;
-        }
-        return Ok(result);
-    } else if right.len() >= 4
-        && right
-            .iter()
-            .all(|(key, value)| !is_container(&value) && key.is_exact_instance_of::<PyString>())
-    {
-        result.update(right.as_mapping())?;
-        return Ok(result);
     }
 
     for (key, right_value) in right.iter() {
         result.set_item(
             &key,
-            merge_entry(left, &key, &right_value, concat_lists, depth + 1)?,
+            merge_entry(left, &key, &right_value, options, depth + 1)?,
         )?;
     }
 
@@ -108,17 +159,35 @@ fn merge_entry<'py>(
     left: &Bound<'py, PyDict>,
     key: &Bound<'py, PyAny>,
     right: &Bound<'py, PyAny>,
-    concat_lists: bool,
+    options: MergeOptions,
     depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if options.typesafe {
+        if let Some(left_value) = left.get_item(key)? {
+            check_same_type(&left_value, right, key)?;
+            if let Ok(right_dict) = right.cast::<PyDict>() {
+                if let Ok(left_dict) = left_value.cast::<PyDict>() {
+                    return Ok(merge_dicts(left_dict, right_dict, options, depth)?.into_any());
+                }
+            } else if options.concat_lists {
+                if let Ok(right_list) = right.cast::<PyList>() {
+                    if let Ok(left_list) = left_value.cast::<PyList>() {
+                        return Ok(copy_list(left_list, Some(right_list), depth)?.into_any());
+                    }
+                }
+            }
+        }
+        return copy_value(right, depth);
+    }
+
     if let Ok(right_dict) = right.cast::<PyDict>() {
         if let Some(left_dict) = left
             .get_item(key)?
             .and_then(|value| value.cast_into::<PyDict>().ok())
         {
-            return Ok(merge_dicts(&left_dict, right_dict, concat_lists, depth)?.into_any());
+            return Ok(merge_dicts(&left_dict, right_dict, options, depth)?.into_any());
         }
-    } else if concat_lists {
+    } else if options.concat_lists {
         if let Ok(right_list) = right.cast::<PyList>() {
             if let Some(left_list) = left
                 .get_item(key)?
@@ -134,7 +203,7 @@ fn merge_entry<'py>(
 
 pub(crate) fn merge_many<'py>(
     dicts: &[Bound<'py, PyDict>],
-    concat_lists: bool,
+    options: MergeOptions,
     depth: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     let py = dicts[0].py();
@@ -146,14 +215,8 @@ pub(crate) fn merge_many<'py>(
             if first_idx > 0 && result.contains(&key)? {
                 continue;
             }
-            let merged = merge_many_entry(
-                dicts,
-                first_idx,
-                &key,
-                &first_value,
-                concat_lists,
-                depth + 1,
-            )?;
+            let merged =
+                merge_many_entry(dicts, first_idx, &key, &first_value, options, depth + 1)?;
             result.set_item(&key, merged)?;
         }
     }
@@ -166,9 +229,48 @@ fn merge_many_entry<'py>(
     first_idx: usize,
     key: &Bound<'py, PyAny>,
     first_value: &Bound<'py, PyAny>,
-    concat_lists: bool,
+    options: MergeOptions,
     depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if options.typesafe {
+        let mut last_value = first_value.clone();
+        let mut dict_values = first_value.cast::<PyDict>().ok().map(|d| vec![d.clone()]);
+        let mut list_values = if options.concat_lists {
+            first_value.cast::<PyList>().ok().map(|l| vec![l.clone()])
+        } else {
+            None
+        };
+
+        for dict in &dicts[first_idx + 1..] {
+            if let Some(value) = dict.get_item(key)? {
+                check_same_type(first_value, &value, key)?;
+                if let Some(ref mut ds) = dict_values {
+                    ds.push(value.cast_into::<PyDict>()?);
+                } else if let Some(ref mut ls) = list_values {
+                    ls.push(value.cast_into::<PyList>()?);
+                } else {
+                    last_value = value;
+                }
+            }
+        }
+
+        if let Some(ds) = dict_values {
+            return match ds.len() {
+                1 => Ok(copy_dict(&ds[0], depth)?.into_any()),
+                2 => Ok(merge_dicts(&ds[0], &ds[1], options, depth)?.into_any()),
+                _ => Ok(merge_many(&ds, options, depth)?.into_any()),
+            };
+        }
+        if let Some(ls) = list_values {
+            return match ls.len() {
+                1 => Ok(copy_list(&ls[0], None, depth)?.into_any()),
+                2 => Ok(copy_list(&ls[0], Some(&ls[1]), depth)?.into_any()),
+                _ => Ok(copy_lists(&ls, depth)?.into_any()),
+            };
+        }
+        return copy_value(&last_value, depth);
+    }
+
     let mut last_idx = first_idx;
     let mut last_value = first_value.clone();
     for idx in (first_idx + 1..dicts.len()).rev() {
@@ -201,12 +303,12 @@ fn merge_many_entry<'py>(
         dict_suffix.reverse();
         return match dict_suffix.len() {
             1 => Ok(copy_dict(&dict_suffix[0], depth)?.into_any()),
-            2 => Ok(merge_dicts(&dict_suffix[0], &dict_suffix[1], concat_lists, depth)?.into_any()),
-            _ => Ok(merge_many(&dict_suffix, concat_lists, depth)?.into_any()),
+            2 => Ok(merge_dicts(&dict_suffix[0], &dict_suffix[1], options, depth)?.into_any()),
+            _ => Ok(merge_many(&dict_suffix, options, depth)?.into_any()),
         };
     }
 
-    if concat_lists {
+    if options.concat_lists {
         if let Ok(last_list) = last_value.cast::<PyList>() {
             if last_idx == first_idx {
                 return Ok(copy_list(last_list, None, depth)?.into_any());

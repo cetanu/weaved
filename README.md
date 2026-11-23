@@ -14,7 +14,7 @@ extension uses [PyO3](https://pyo3.rs/) and is built with
 [maturin](https://www.maturin.rs/).
 
 ```python
-from weave import merge
+from weave import CONCAT_LISTS, TYPESAFE, merge
 
 defaults = {"server": {"host": "localhost", "port": 8000}, "plugins": ["logging"]}
 env = {"server": {"port": 9000}, "plugins": ["metrics"]}
@@ -23,22 +23,36 @@ cli = {"server": {"tls": True}, "plugins": ["tracing"]}
 merge(defaults, env, cli)
 # {"server": {"host": "localhost", "port": 9000, "tls": True}, "plugins": ["tracing"]}
 
-merge(defaults, env, cli, concat_lists=True)
+merge(defaults, env, cli, flags=CONCAT_LISTS)
 # {"server": {"host": "localhost", "port": 9000, "tls": True}, "plugins": ["logging", "metrics", "tracing"]}
+
+merge(defaults, env, cli, flags=CONCAT_LISTS | TYPESAFE)
+# Raises TypeError if conflicting keys have mismatched types
 ```
 
 ## Merge semantics
 
-`merge(*dicts, concat_lists=False) -> dict`
+`merge(*dicts, flags=0) -> dict`
+
+`flags` is a bitmask of `MergeFlag` (`enum.IntFlag`) values, combinable with `|`
+(similar to Python's `re` module flags):
+
+- `NONE` (`0o0`): default behavior — recursively merge dictionaries, replace
+  other conflicts with the rightmost value.
+- `CONCAT_LISTS` (`0o1`): concatenate consecutive lists at a key in
+  left-to-right order at every dictionary depth. Duplicates remain; elements
+  are not merged by index.
+- `TYPESAFE` (`0o2`): raise `TypeError` when conflicting values at the same key
+  do not have the exact same Python type (`type(a) is not type(b)`).
+
+Additional guarantees:
 
 - Accepts zero or more dictionaries (subclasses are accepted). `merge()` returns
   `{}`; `merge(d)` returns an independent copy of `d`'s dict/list containers.
 - Dictionaries merge from left to right. When consecutive values at a key are
   dictionaries, they merge recursively.
-- Otherwise the rightmost value wins, including `None` and empty values.
-- With `concat_lists=True`, consecutive lists at a key concatenate in
-  left-to-right order at every dictionary depth. Duplicates remain; elements
-  are not merged by index.
+- Without `TYPESAFE`, the rightmost value wins, including `None` and empty values.
+- Invalid flag bits raise `ValueError`.
 - Every dictionary and list reached through dictionary values or list elements
   is copied. Changing those containers in the result does not change any input.
   Container subclasses become plain dictionaries and lists, using their stored
