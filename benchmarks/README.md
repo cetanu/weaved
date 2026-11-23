@@ -29,11 +29,11 @@ scalar lists.
 ![Chart of selected CPython 3.14 performance gains](performance.svg)
 
 The [interactive report](performance.html) is a single self-contained HTML file.
-On each push to `master`, GitHub Actions measures Weaved and the Python reference
-in the same ASV run, appends their speedup ratios to `performance-data.json`, and
-regenerates the report. The ratios reduce variation between hosted runner
-instances. Download the HTML and open it in a browser; no hosted Pages site is
-needed.
+On each push to `master`, GitHub Actions measures Weaved, the Python reference,
+and `mergedeep` in the same ASV run, appends their speedup ratios to
+`performance-data.json`, and regenerates the report. The ratios reduce variation
+between hosted runner instances. Download the HTML and open it in a browser; no
+hosted Pages site is needed.
 
 On the same machine, a 20-repeat CPU-pinned CPython 3.14 ASV comparison on
 2026-10-03 measured the 10,000-key flat merge at 342 ± 4 µs on the published
@@ -90,3 +90,55 @@ showed no significant change when lowering the cutoff.
 Lowering the prefix from 4 entries to 2 improved an 8-entry map with its
 nested value at position 2 by about 20% on CPython 3.14 and 14% on CPython 3.11;
 the early, boundary, nested, and wide cases showed no significant change.
+
+## Comparison with `mergedeep`
+
+Measured on 2026-11-23 with CPython 3.14.7, macOS (Darwin 24.6.0, arm64),
+Apple M1 Pro, and [`mergedeep`](https://pypi.org/project/mergedeep/) 1.3.4 via
+ASV (`--interleave-rounds`). Weave was compiled in release mode. Because
+`mergedeep.merge` mutates its first argument in place, it is benchmarked in its
+idiomatic non-mutating form `mergedeep.merge({}, left, right, strategy=...)`
+using `Strategy.REPLACE` or `Strategy.ADDITIVE` to match `concat_lists`. Every
+case verifies equal results before timing.
+
+| Workload | Weave | Python reference | `mergedeep` 1.3.4 | Speedup vs `mergedeep` |
+| --- | ---: | ---: | ---: | ---: |
+| `tiny` | 2.10 ± 0.1 µs | 2.73 ± 0.3 µs | 4.19 ± 0.6 µs | 2.0× |
+| `flat` (10,000 keys each) | 433 ± 8 µs | 2.25 ± 0.03 ms | 3.73 ± 0.02 ms | 8.6× |
+| `nested` (100 services) | 38.3 ± 1 µs | 138 ± 6 µs | 402 ± 10 µs | 10.5× |
+| `nested_concat` (100 services, list concat) | 39.5 ± 1 µs | 165 ± 3 µs | 423 ± 5 µs | 10.7× |
+| `deep` (100 levels) | 14.2 ± 3 µs | 33.9 ± 0.5 µs | 100 ± 2 µs | 7.0× |
+| `list_replace` (10,000 scalars) | 32.3 ± 8 µs | 647 ± 7 µs | 873 ± 20 µs | 27.0× |
+| `list_concat` (10,000 scalars each) | 57.6 ± 6 µs | 1.32 ± 0.02 ms | 895 ± 8 µs | 15.5× |
+| `container_lists` (500 + 500 nested dicts) | 110 ± 1 µs | 446 ± 5 µs | 1.02 ± 0.01 ms | 9.3× |
+| `overwritten` (100 services replaced by `None`) | 1.69 ± 0.2 µs | 2.17 ± 0.2 µs | 192 ± 4 µs | 114× |
+| `wide_mixed_late` (10k keys, nested last) | 372 ± 10 µs | 2.17 ± 0.03 ms | 5.13 ± 0.05 ms | 13.8× |
+| `medium_mixed_late` (32 keys, nested last) | 2.27 ± 0.09 µs | 7.35 ± 0.8 µs | 7.67 ± 0.4 µs | 3.4× |
+| `copy_subtree` (10,000-key subtree copy) | 58.1 ± 2 µs | 928 ± 10 µs | 972 ± 10 µs | 16.7× |
+| `copy_subtree_mixed_late` (10k keys + nested) | 64.2 ± 7 µs | 923 ± 10 µs | 985 ± 10 µs | 15.3× |
+
+`mergedeep` calls `copy.deepcopy` on every inserted or replaced value and, in
+non-mutating `merge({}, left, right)` form, deep-copies `left` before `right`
+is applied (which explains the 114× gap on `overwritten`). Weave avoids
+`copy.deepcopy`, skips overwritten subtrees, and uses native dict/list copies
+when no nested containers need recursion.
+
+### Feature parity and semantic differences
+
+`weave` and `mergedeep` overlap on recursive dictionary merging and list
+concatenation, but differ in several ways:
+
+| Capability | `weave` | `mergedeep` |
+| --- | --- | --- |
+| Mutation | Always non-mutating; returns a new `dict` | Mutates `destination` in place (pass `{}` first for a new `dict`) |
+| Number of inputs | Binary: `merge(left, right)` | Variadic: `merge(destination, *sources)` |
+| Mapping types | `dict` and `dict` subclasses (normalized to plain `dict`) | Any `MutableMapping` / `Mapping` (e.g. `UserDict`, `ChainMap`, `MappingProxyType`, `Counter`) |
+| Merge strategies | `concat_lists=False` (replace) or `True` (concatenate `list`s) | `Strategy.REPLACE`, `ADDITIVE` (`list`, `set`, `tuple`, `Counter`), `TYPESAFE` / `TYPESAFE_REPLACE`, `TYPESAFE_ADDITIVE` |
+| Copying semantics | Copies `dict` and `list` containers only; keys and opaque objects (tuples, sets, custom instances) keep identity | Uses `copy.deepcopy` on copied values (invokes `__deepcopy__` and copies tuples, sets, and custom objects) |
+| Overwritten subtrees | Not traversed or copied | Deep-copied from `left` first when using `merge({}, left, right)` |
+| Cycles and recursion | 256-level depth guard; traversed cycles raise `RecursionError` | Relies on Python's recursion limit for `_deepmerge`; `deepcopy` preserves cycles in copied subtrees via its memo dict |
+| Runtime / packaging | Rust/PyO3 extension (CPython 3.11+) | Pure Python, no dependencies (any Python 3 implementation) |
+
+One subtle `mergedeep` edge case: `_deepmerge` short-circuits with `pass` when
+`dst[key] is src[key]`, so under `Strategy.ADDITIVE` two references to the exact
+same immutable tuple (or same list in an in-place merge) are not concatenated.

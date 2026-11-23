@@ -76,7 +76,8 @@ The merge walks Python containers directly through PyO3, with native dictionary
 copies and list concatenation. Scalar leaves stay as Python objects; there is no
 JSON encoding, deserialization, or conversion to Rust maps.
 
-Run the Airspeed Velocity benchmarks against an equivalent Python implementation:
+Run the Airspeed Velocity benchmarks against an equivalent Python implementation
+and [`mergedeep`](https://pypi.org/project/mergedeep/):
 
 ```sh
 uv sync
@@ -85,7 +86,8 @@ uv run asv continuous --factor 1.15 --interleave-rounds --split HEAD^ HEAD
 
 Benchmarks check matching results before timing and cover flat dictionaries,
 nested configuration, deep dictionaries, large lists, and list concatenation.
-Both implementations copy dict/list containers and share opaque leaves. ASV
+Weave and the Python reference copy dict/list containers and share opaque leaves,
+while `mergedeep` is benchmarked in non-mutating mode (`mergedeep.merge({}, left, right, ...)`). ASV
 stores results in `.asv/results`; CI compares each pull request against its base
 revision on the same runner and uploads the result files as a workflow artifact.
 The 15% threshold filters small variations. Use release builds and measure your

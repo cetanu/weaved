@@ -25,6 +25,7 @@ dev = [
     "hypothesis>=6.140",
     "maturin>=1.15,<2",
     "asv>=0.6.6,<0.7",
+    "mergedeep>=1.3.4,<2",
     "pytest>=8.4",
     "ruff>=0.13",
 ]

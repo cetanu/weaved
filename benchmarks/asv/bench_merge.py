@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from mergedeep import Strategy
+from mergedeep import merge as _mergedeep_merge
 from weave import merge
 
 
@@ -38,6 +40,18 @@ def python_merge(left, right, *, concat_lists=False):
         else:
             result[key] = copy_value(value)
     return result
+
+
+def mergedeep_merge(left, right, *, concat_lists=False):
+    strategy = Strategy.ADDITIVE if concat_lists else Strategy.REPLACE
+    return _mergedeep_merge({}, left, right, strategy=strategy)
+
+
+IMPLEMENTATIONS = {
+    "weave": merge,
+    "python": python_merge,
+    "mergedeep": mergedeep_merge,
+}
 
 
 def cases():
@@ -141,14 +155,13 @@ class MergeBenchmarks:
     def setup(self):
         self.workloads = {case.name: case() for case in cases()}
         for name, (left, right, concat_lists) in self.workloads.items():
-            assert merge(left, right, concat_lists=concat_lists) == python_merge(
-                left, right, concat_lists=concat_lists
-            ), name
+            expected = merge(left, right, concat_lists=concat_lists)
+            assert expected == python_merge(left, right, concat_lists=concat_lists), name
+            assert expected == mergedeep_merge(left, right, concat_lists=concat_lists), name
 
     def _run(self, workload, implementation):
         left, right, concat_lists = self.workloads[workload]
-        function = merge if implementation == "weave" else python_merge
-        return function(left, right, concat_lists=concat_lists)
+        return IMPLEMENTATIONS[implementation](left, right, concat_lists=concat_lists)
 
     def time_tiny_weave(self):
         self._run("tiny", "weave")
@@ -156,11 +169,17 @@ class MergeBenchmarks:
     def time_tiny_python(self):
         self._run("tiny", "python")
 
+    def time_tiny_mergedeep(self):
+        self._run("tiny", "mergedeep")
+
     def time_flat_weave(self):
         self._run("flat", "weave")
 
     def time_flat_python(self):
         self._run("flat", "python")
+
+    def time_flat_mergedeep(self):
+        self._run("flat", "mergedeep")
 
     def time_nested_weave(self):
         self._run("nested", "weave")
@@ -168,11 +187,17 @@ class MergeBenchmarks:
     def time_nested_python(self):
         self._run("nested", "python")
 
+    def time_nested_mergedeep(self):
+        self._run("nested", "mergedeep")
+
     def time_nested_concat_weave(self):
         self._run("nested_concat", "weave")
 
     def time_nested_concat_python(self):
         self._run("nested_concat", "python")
+
+    def time_nested_concat_mergedeep(self):
+        self._run("nested_concat", "mergedeep")
 
     def time_deep_weave(self):
         self._run("deep", "weave")
@@ -180,11 +205,17 @@ class MergeBenchmarks:
     def time_deep_python(self):
         self._run("deep", "python")
 
+    def time_deep_mergedeep(self):
+        self._run("deep", "mergedeep")
+
     def time_list_replace_weave(self):
         self._run("list_replace", "weave")
 
     def time_list_replace_python(self):
         self._run("list_replace", "python")
+
+    def time_list_replace_mergedeep(self):
+        self._run("list_replace", "mergedeep")
 
     def time_list_concat_weave(self):
         self._run("list_concat", "weave")
@@ -192,11 +223,17 @@ class MergeBenchmarks:
     def time_list_concat_python(self):
         self._run("list_concat", "python")
 
+    def time_list_concat_mergedeep(self):
+        self._run("list_concat", "mergedeep")
+
     def time_container_lists_weave(self):
         self._run("container_lists", "weave")
 
     def time_container_lists_python(self):
         self._run("container_lists", "python")
+
+    def time_container_lists_mergedeep(self):
+        self._run("container_lists", "mergedeep")
 
     def time_overwritten_weave(self):
         self._run("overwritten", "weave")
@@ -204,11 +241,17 @@ class MergeBenchmarks:
     def time_overwritten_python(self):
         self._run("overwritten", "python")
 
+    def time_overwritten_mergedeep(self):
+        self._run("overwritten", "mergedeep")
+
     def time_wide_mixed_late_weave(self):
         self._run("wide_mixed_late", "weave")
 
     def time_wide_mixed_late_python(self):
         self._run("wide_mixed_late", "python")
+
+    def time_wide_mixed_late_mergedeep(self):
+        self._run("wide_mixed_late", "mergedeep")
 
     def time_medium_weave(self):
         self._run("medium", "weave")
@@ -216,11 +259,17 @@ class MergeBenchmarks:
     def time_medium_python(self):
         self._run("medium", "python")
 
+    def time_medium_mergedeep(self):
+        self._run("medium", "mergedeep")
+
     def time_medium_mixed_late_weave(self):
         self._run("medium_mixed_late", "weave")
 
     def time_medium_mixed_late_python(self):
         self._run("medium_mixed_late", "python")
+
+    def time_medium_mixed_late_mergedeep(self):
+        self._run("medium_mixed_late", "mergedeep")
 
     def time_medium_nonstring_late_weave(self):
         self._run("medium_nonstring_late", "weave")
@@ -228,11 +277,17 @@ class MergeBenchmarks:
     def time_medium_nonstring_late_python(self):
         self._run("medium_nonstring_late", "python")
 
+    def time_medium_nonstring_late_mergedeep(self):
+        self._run("medium_nonstring_late", "mergedeep")
+
     def time_small_mixed_late_weave(self):
         self._run("small_mixed_late", "weave")
 
     def time_small_mixed_late_python(self):
         self._run("small_mixed_late", "python")
+
+    def time_small_mixed_late_mergedeep(self):
+        self._run("small_mixed_late", "mergedeep")
 
     def time_small_mixed_early_weave(self):
         self._run("small_mixed_early", "weave")
@@ -240,11 +295,17 @@ class MergeBenchmarks:
     def time_small_mixed_early_python(self):
         self._run("small_mixed_early", "python")
 
+    def time_small_mixed_early_mergedeep(self):
+        self._run("small_mixed_early", "mergedeep")
+
     def time_small_mixed_boundary_weave(self):
         self._run("small_mixed_boundary", "weave")
 
     def time_small_mixed_boundary_python(self):
         self._run("small_mixed_boundary", "python")
+
+    def time_small_mixed_boundary_mergedeep(self):
+        self._run("small_mixed_boundary", "mergedeep")
 
     def time_small_mixed_after_two_weave(self):
         self._run("small_mixed_after_two", "weave")
@@ -252,11 +313,17 @@ class MergeBenchmarks:
     def time_small_mixed_after_two_python(self):
         self._run("small_mixed_after_two", "python")
 
+    def time_small_mixed_after_two_mergedeep(self):
+        self._run("small_mixed_after_two", "mergedeep")
+
     def time_small_scalar_weave(self):
         self._run("small_scalar", "weave")
 
     def time_small_scalar_python(self):
         self._run("small_scalar", "python")
+
+    def time_small_scalar_mergedeep(self):
+        self._run("small_scalar", "mergedeep")
 
     def time_small_nonstring_late_weave(self):
         self._run("small_nonstring_late", "weave")
@@ -264,17 +331,26 @@ class MergeBenchmarks:
     def time_small_nonstring_late_python(self):
         self._run("small_nonstring_late", "python")
 
+    def time_small_nonstring_late_mergedeep(self):
+        self._run("small_nonstring_late", "mergedeep")
+
     def time_tiny_mixed_late_weave(self):
         self._run("tiny_mixed_late", "weave")
 
     def time_tiny_mixed_late_python(self):
         self._run("tiny_mixed_late", "python")
 
+    def time_tiny_mixed_late_mergedeep(self):
+        self._run("tiny_mixed_late", "mergedeep")
+
     def time_copy_subtree_weave(self):
         self._run("copy_subtree", "weave")
 
     def time_copy_subtree_python(self):
         self._run("copy_subtree", "python")
+
+    def time_copy_subtree_mergedeep(self):
+        self._run("copy_subtree", "mergedeep")
 
     def time_copy_subtree_1_weave(self):
         self._run("copy_subtree_1", "weave")
@@ -294,14 +370,23 @@ class MergeBenchmarks:
     def time_copy_subtree_mixed_late_python(self):
         self._run("copy_subtree_mixed_late", "python")
 
+    def time_copy_subtree_mixed_late_mergedeep(self):
+        self._run("copy_subtree_mixed_late", "mergedeep")
+
     def time_wide_nonstring_late_weave(self):
         self._run("wide_nonstring_late", "weave")
 
     def time_wide_nonstring_late_python(self):
         self._run("wide_nonstring_late", "python")
 
+    def time_wide_nonstring_late_mergedeep(self):
+        self._run("wide_nonstring_late", "mergedeep")
+
     def time_wide_integer_weave(self):
         self._run("wide_integer", "weave")
 
     def time_wide_integer_python(self):
         self._run("wide_integer", "python")
+
+    def time_wide_integer_mergedeep(self):
+        self._run("wide_integer", "mergedeep")
