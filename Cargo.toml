@@ -3,6 +3,7 @@ name = "weave"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+publish = false
 description = "Fast, non-mutating deep merges for Python dictionaries"
 readme = "README.md"
 repository = "https://github.com/cetanu/weaved"

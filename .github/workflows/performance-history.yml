@@ -56,7 +56,7 @@ jobs:
               echo "Benchmark history already contains $COMMIT"
               exit 0
             fi
-            git commit -m "Record ASV benchmark history"
+            git commit -m "chore(bench): record ASV benchmark history"
             if git push origin master; then
               exit 0
             fi
