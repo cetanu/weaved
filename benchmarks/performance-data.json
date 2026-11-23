@@ -94,5 +94,60 @@
         "mergedeep_speedup": 17.954870090742265
       }
     }
+  },
+  {
+    "commit": "886c0d30ebe5f20554cba694024f996976cb5255",
+    "date": "2026-11-23T00:42:28+00:00",
+    "benchmarks": {
+      "flat": {
+        "weave_seconds": 0.000652350999985174,
+        "python_seconds": 0.003407096499955742,
+        "speedup": 5.222796470049368,
+        "mergedeep_seconds": 0.005546745999993163,
+        "mergedeep_speedup": 8.50270176656313
+      },
+      "wide mixed": {
+        "weave_seconds": 0.00047165449998942677,
+        "python_seconds": 0.003473582500021166,
+        "speedup": 7.364675838137948,
+        "mergedeep_seconds": 0.007965640500003701,
+        "mergedeep_speedup": 16.88871939138134
+      },
+      "medium mixed": {
+        "weave_seconds": 6.255500039742401e-06,
+        "python_seconds": 1.679850001323757e-05,
+        "speedup": 2.685396835826625,
+        "mergedeep_seconds": 2.20884999748705e-05,
+        "mergedeep_speedup": 3.5310526471965455
+      },
+      "subtree copy": {
+        "weave_seconds": 0.00011732400000141752,
+        "python_seconds": 0.0014440244999889273,
+        "speedup": 12.30800603432785,
+        "mergedeep_seconds": 0.001436058500019044,
+        "mergedeep_speedup": 12.240108588197584
+      },
+      "mixed subtree copy": {
+        "weave_seconds": 0.00011218500003451481,
+        "python_seconds": 0.001432095999973626,
+        "speedup": 12.765485577688885,
+        "mergedeep_seconds": 0.001445062500010863,
+        "mergedeep_speedup": 12.881066983699027
+      },
+      "list replace": {
+        "weave_seconds": 5.321649999245892e-05,
+        "python_seconds": 0.0010362705000090955,
+        "speedup": 19.47272932560279,
+        "mergedeep_seconds": 0.001226542500035066,
+        "mergedeep_speedup": 23.048161758268094
+      },
+      "list concatenate": {
+        "weave_seconds": 0.00010581399999409768,
+        "python_seconds": 0.002111652500019545,
+        "speedup": 19.95626760293849,
+        "mergedeep_seconds": 0.0012620154999751776,
+        "mergedeep_speedup": 11.926734648019854
+      }
+    }
   }
 ]
