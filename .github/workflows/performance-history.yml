@@ -3,9 +3,14 @@ name: Performance history
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - benchmarks/performance-data.json
-      - benchmarks/performance.html
+    paths:
+      - "src/**"
+      - "python/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pyproject.toml"
+      - "asv.conf.json"
+      - "benchmarks/asv/**"
 
 permissions:
   contents: write
