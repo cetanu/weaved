@@ -17,26 +17,30 @@ extension uses [PyO3](https://pyo3.rs/) and is built with
 from weave import merge
 
 defaults = {"server": {"host": "localhost", "port": 8000}, "plugins": ["logging"]}
-overrides = {"server": {"port": 9000}, "plugins": ["metrics"]}
+env = {"server": {"port": 9000}, "plugins": ["metrics"]}
+cli = {"server": {"tls": True}, "plugins": ["tracing"]}
 
-merge(defaults, overrides)
-# {"server": {"host": "localhost", "port": 9000}, "plugins": ["metrics"]}
+merge(defaults, env, cli)
+# {"server": {"host": "localhost", "port": 9000, "tls": True}, "plugins": ["tracing"]}
 
-merge(defaults, overrides, concat_lists=True)
-# {"server": {"host": "localhost", "port": 9000}, "plugins": ["logging", "metrics"]}
+merge(defaults, env, cli, concat_lists=True)
+# {"server": {"host": "localhost", "port": 9000, "tls": True}, "plugins": ["logging", "metrics", "tracing"]}
 ```
 
 ## Merge semantics
 
-`merge(left, right, *, concat_lists=False) -> dict`
+`merge(*dicts, concat_lists=False) -> dict`
 
-- Both arguments must be dictionaries (subclasses are accepted).
-- When both values at a key are dictionaries, merge them recursively.
-- Otherwise the right value replaces the left, including `None` and empty values.
-- With `concat_lists=True`, two lists concatenate in left-to-right order at
-  every dictionary depth. Duplicates remain; elements are not merged by index.
+- Accepts zero or more dictionaries (subclasses are accepted). `merge()` returns
+  `{}`; `merge(d)` returns an independent copy of `d`'s dict/list containers.
+- Dictionaries merge from left to right. When consecutive values at a key are
+  dictionaries, they merge recursively.
+- Otherwise the rightmost value wins, including `None` and empty values.
+- With `concat_lists=True`, consecutive lists at a key concatenate in
+  left-to-right order at every dictionary depth. Duplicates remain; elements
+  are not merged by index.
 - Every dictionary and list reached through dictionary values or list elements
-  is copied. Changing those containers in the result does not change either input.
+  is copied. Changing those containers in the result does not change any input.
   Container subclasses become plain dictionaries and lists, using their stored
   contents rather than overridden Python methods.
 - Keys and other objects (including tuples, sets, and custom instances) retain
@@ -44,8 +48,9 @@ merge(defaults, overrides, concat_lists=True)
   For example, a list inside an opaque tuple remains shared.
 - Repeated references to the same container are copied separately; alias
   relationships are not preserved.
-- Existing keys retain their left-hand insertion order. New keys are appended
-  in right-hand order. All hashable Python keys are supported.
+- Existing keys retain the insertion order and key identity of the leftmost
+  dictionary that introduced them. New keys are appended in order. All hashable
+  Python keys are supported.
 - Traversed cycles or more than 256 nested dictionary/list levels raise
   `RecursionError`; Python's own stack guard can stop traversal earlier.
   Overwritten values are not traversed.

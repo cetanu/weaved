@@ -107,6 +107,8 @@ case verifies equal results before timing.
 | `flat` (10,000 keys each) | 433 ± 8 µs | 2.25 ± 0.03 ms | 3.73 ± 0.02 ms | 8.6× |
 | `nested` (100 services) | 38.3 ± 1 µs | 138 ± 6 µs | 402 ± 10 µs | 10.5× |
 | `nested_concat` (100 services, list concat) | 39.5 ± 1 µs | 165 ± 3 µs | 423 ± 5 µs | 10.7× |
+| `multi_nested` (4 layers × 100 services) | 75.9 ± 7 µs | 388 ± 5 µs | 727 ± 3 µs | 9.6× |
+| `multi_nested_concat` (4 layers, list concat) | 84.9 ± 4 µs | 486 ± 4 µs | 789 ± 5 µs | 9.3× |
 | `deep` (100 levels) | 14.2 ± 3 µs | 33.9 ± 0.5 µs | 100 ± 2 µs | 7.0× |
 | `list_replace` (10,000 scalars) | 32.3 ± 8 µs | 647 ± 7 µs | 873 ± 20 µs | 27.0× |
 | `list_concat` (10,000 scalars each) | 57.6 ± 6 µs | 1.32 ± 0.02 ms | 895 ± 8 µs | 15.5× |
@@ -131,7 +133,7 @@ concatenation, but differ in several ways:
 | Capability | `weave` | `mergedeep` |
 | --- | --- | --- |
 | Mutation | Always non-mutating; returns a new `dict` | Mutates `destination` in place (pass `{}` first for a new `dict`) |
-| Number of inputs | Binary: `merge(left, right)` | Variadic: `merge(destination, *sources)` |
+| Number of inputs | Variadic: `merge(*dicts)` (0 or more dicts) | Variadic: `merge(destination, *sources)` |
 | Mapping types | `dict` and `dict` subclasses (normalized to plain `dict`) | Any `MutableMapping` / `Mapping` (e.g. `UserDict`, `ChainMap`, `MappingProxyType`, `Counter`) |
 | Merge strategies | `concat_lists=False` (replace) or `True` (concatenate `list`s) | `Strategy.REPLACE`, `ADDITIVE` (`list`, `set`, `tuple`, `Counter`), `TYPESAFE` / `TYPESAFE_REPLACE`, `TYPESAFE_ADDITIVE` |
 | Copying semantics | Copies `dict` and `list` containers only; keys and opaque objects (tuples, sets, custom instances) keep identity | Uses `copy.deepcopy` on copied values (invokes `__deepcopy__` and copies tuples, sets, and custom objects) |

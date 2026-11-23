@@ -48,6 +48,21 @@ def test_matches_reference_and_preserves_input_container_identities(left, right,
     assert equivalent(right, merge({}, right))
 
 
+@settings(max_examples=200)
+@given(layers=st.lists(dicts, min_size=0, max_size=5), concat_lists=st.booleans())
+def test_variadic_matches_left_fold_reference(layers, concat_lists):
+    expected = {}
+    for layer in layers:
+        expected = reference_merge(expected, layer, concat_lists)
+    before = [deepcopy(layer) for layer in layers]
+    input_ids = set().union(*(container_ids(layer) for layer in layers)) if layers else set()
+    result = merge(*layers, concat_lists=concat_lists)
+    assert equivalent(result, expected)
+    assert container_ids(result).isdisjoint(input_ids)
+    for layer, snapshot in zip(layers, before, strict=True):
+        assert equivalent(layer, snapshot)
+
+
 def container_ids(value):
     if isinstance(value, dict):
         children = value.values()

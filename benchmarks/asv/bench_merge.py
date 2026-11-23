@@ -8,14 +8,13 @@ from weave import merge
 @dataclass
 class BenchCase:
     name: str
-    source: dict
-    dest: dict
+    inputs: tuple[dict, ...]
 
     def __call__(self):
-        return self.source, self.dest, self.name in CONCAT_LIST_CASES
+        return self.inputs, self.name in CONCAT_LIST_CASES
 
 
-CONCAT_LIST_CASES = {"nested_concat", "list_concat", "container_lists"}
+CONCAT_LIST_CASES = {"nested_concat", "list_concat", "container_lists", "multi_nested_concat"}
 
 
 def copy_value(value):
@@ -26,7 +25,7 @@ def copy_value(value):
     return value
 
 
-def python_merge(left, right, *, concat_lists=False):
+def _python_merge_two(left, right, *, concat_lists=False):
     result = dict.copy(left)
     for key, value in dict.items(left):
         if isinstance(value, (dict, list)) and key not in right:
@@ -34,7 +33,7 @@ def python_merge(left, right, *, concat_lists=False):
     for key, value in dict.items(right):
         previous = dict.get(left, key)
         if isinstance(previous, dict) and isinstance(value, dict):
-            result[key] = python_merge(previous, value, concat_lists=concat_lists)
+            result[key] = _python_merge_two(previous, value, concat_lists=concat_lists)
         elif concat_lists and isinstance(previous, list) and isinstance(value, list):
             result[key] = copy_value(list.__add__(previous, value))
         else:
@@ -42,9 +41,20 @@ def python_merge(left, right, *, concat_lists=False):
     return result
 
 
-def mergedeep_merge(left, right, *, concat_lists=False):
+def python_merge(*dicts, concat_lists=False):
+    if not dicts:
+        return {}
+    if len(dicts) == 1:
+        return copy_value(dicts[0])
+    result = _python_merge_two(dicts[0], dicts[1], concat_lists=concat_lists)
+    for layer in dicts[2:]:
+        result = _python_merge_two(result, layer, concat_lists=concat_lists)
+    return result
+
+
+def mergedeep_merge(*dicts, concat_lists=False):
     strategy = Strategy.ADDITIVE if concat_lists else Strategy.REPLACE
-    return _mergedeep_merge({}, left, right, strategy=strategy)
+    return _mergedeep_merge({}, *dicts, strategy=strategy)
 
 
 IMPLEMENTATIONS = {
@@ -111,57 +121,67 @@ def cases():
     wide_nonstring_late = {f"key{i}": i for i in range(9_999)}
     wide_nonstring_late[9_999] = 9_999
     wide_integer = {i: i for i in range(10_000)}
+    nested_layer3 = {f"service{i}": {"port": 9000 + i, "plugins": ["tracing"]} for i in range(100)}
+    nested_layer4 = {
+        f"service{i}": {"tls": {"cert": "pem"}, "plugins": ["rate_limit"]} for i in range(100)
+    }
     return [
-        BenchCase("tiny", {"a": 1, "b": 2}, {"b": 3, "c": 4}),
+        BenchCase("tiny", ({"a": 1, "b": 2}, {"b": 3, "c": 4})),
         BenchCase(
             "flat",
-            {f"k{i}": i for i in range(10_000)},
-            {f"k{i}": -i for i in range(5_000, 15_000)},
+            (
+                {f"k{i}": i for i in range(10_000)},
+                {f"k{i}": -i for i in range(5_000, 15_000)},
+            ),
         ),
-        BenchCase("nested", nested_left, nested_right),
-        BenchCase("nested_concat", nested_left, nested_right),
-        BenchCase("deep", deep_source, deep_dest),
-        BenchCase("list_replace", {"items": list(range(10_000))}, {"items": list(range(10_000))}),
-        BenchCase("list_concat", {"items": list(range(10_000))}, {"items": list(range(10_000))}),
+        BenchCase("nested", (nested_left, nested_right)),
+        BenchCase("nested_concat", (nested_left, nested_right)),
+        BenchCase("multi_nested", (nested_left, nested_right, nested_layer3, nested_layer4)),
+        BenchCase("multi_nested_concat", (nested_left, nested_right, nested_layer3, nested_layer4)),
+        BenchCase("deep", (deep_source, deep_dest)),
+        BenchCase("list_replace", ({"items": list(range(10_000))}, {"items": list(range(10_000))})),
+        BenchCase("list_concat", ({"items": list(range(10_000))}, {"items": list(range(10_000))})),
         BenchCase(
             "container_lists",
-            {"items": [{"id": i, "tags": [i]} for i in range(500)]},
-            {"items": [{"id": i, "tags": [i]} for i in range(500, 1_000)]},
+            (
+                {"items": [{"id": i, "tags": [i]} for i in range(500)]},
+                {"items": [{"id": i, "tags": [i]} for i in range(500, 1_000)]},
+            ),
         ),
-        BenchCase("overwritten", {"items": overwritten}, {"items": None}),
-        BenchCase("wide_mixed_late", wide_left, wide_right),
-        BenchCase("medium", medium_left, medium_right),
-        BenchCase("medium_mixed_late", {}, medium_mixed_late),
-        BenchCase("medium_nonstring_late", {}, medium_nonstring_late),
-        BenchCase("small_mixed_late", {}, small_mixed_late),
-        BenchCase("small_mixed_early", {}, small_mixed_early),
-        BenchCase("small_mixed_boundary", {}, small_mixed_boundary),
-        BenchCase("small_mixed_after_two", {}, small_mixed_after_two),
-        BenchCase("small_scalar", {}, small_scalar),
-        BenchCase("small_nonstring_late", {}, small_nonstring_late),
-        BenchCase("tiny_mixed_late", {}, tiny_mixed_late),
-        BenchCase("copy_subtree", {}, {"config": copied_subtree}),
+        BenchCase("overwritten", ({"items": overwritten}, {"items": None})),
+        BenchCase("wide_mixed_late", (wide_left, wide_right)),
+        BenchCase("medium", (medium_left, medium_right)),
+        BenchCase("medium_mixed_late", ({}, medium_mixed_late)),
+        BenchCase("medium_nonstring_late", ({}, medium_nonstring_late)),
+        BenchCase("small_mixed_late", ({}, small_mixed_late)),
+        BenchCase("small_mixed_early", ({}, small_mixed_early)),
+        BenchCase("small_mixed_boundary", ({}, small_mixed_boundary)),
+        BenchCase("small_mixed_after_two", ({}, small_mixed_after_two)),
+        BenchCase("small_scalar", ({}, small_scalar)),
+        BenchCase("small_nonstring_late", ({}, small_nonstring_late)),
+        BenchCase("tiny_mixed_late", ({}, tiny_mixed_late)),
+        BenchCase("copy_subtree", ({}, {"config": copied_subtree})),
         *[
-            BenchCase(f"copy_subtree_{size}", {}, {"config": subtree})
+            BenchCase(f"copy_subtree_{size}", ({}, {"config": subtree}))
             for size, subtree in copied_subtrees.items()
         ],
-        BenchCase("copy_subtree_mixed_late", {}, {"config": copied_subtree_mixed_late}),
-        BenchCase("wide_nonstring_late", {}, wide_nonstring_late),
-        BenchCase("wide_integer", {}, wide_integer),
+        BenchCase("copy_subtree_mixed_late", ({}, {"config": copied_subtree_mixed_late})),
+        BenchCase("wide_nonstring_late", ({}, wide_nonstring_late)),
+        BenchCase("wide_integer", ({}, wide_integer)),
     ]
 
 
 class MergeBenchmarks:
     def setup(self):
         self.workloads = {case.name: case() for case in cases()}
-        for name, (left, right, concat_lists) in self.workloads.items():
-            expected = merge(left, right, concat_lists=concat_lists)
-            assert expected == python_merge(left, right, concat_lists=concat_lists), name
-            assert expected == mergedeep_merge(left, right, concat_lists=concat_lists), name
+        for name, (inputs, concat_lists) in self.workloads.items():
+            expected = merge(*inputs, concat_lists=concat_lists)
+            assert expected == python_merge(*inputs, concat_lists=concat_lists), name
+            assert expected == mergedeep_merge(*inputs, concat_lists=concat_lists), name
 
     def _run(self, workload, implementation):
-        left, right, concat_lists = self.workloads[workload]
-        return IMPLEMENTATIONS[implementation](left, right, concat_lists=concat_lists)
+        inputs, concat_lists = self.workloads[workload]
+        return IMPLEMENTATIONS[implementation](*inputs, concat_lists=concat_lists)
 
     def time_tiny_weave(self):
         self._run("tiny", "weave")
@@ -198,6 +218,24 @@ class MergeBenchmarks:
 
     def time_nested_concat_mergedeep(self):
         self._run("nested_concat", "mergedeep")
+
+    def time_multi_nested_weave(self):
+        self._run("multi_nested", "weave")
+
+    def time_multi_nested_python(self):
+        self._run("multi_nested", "python")
+
+    def time_multi_nested_mergedeep(self):
+        self._run("multi_nested", "mergedeep")
+
+    def time_multi_nested_concat_weave(self):
+        self._run("multi_nested_concat", "weave")
+
+    def time_multi_nested_concat_python(self):
+        self._run("multi_nested_concat", "python")
+
+    def time_multi_nested_concat_mergedeep(self):
+        self._run("multi_nested_concat", "mergedeep")
 
     def time_deep_weave(self):
         self._run("deep", "weave")

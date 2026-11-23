@@ -184,9 +184,13 @@ def test_shared_containers_are_copied_per_occurrence():
 @pytest.mark.parametrize("invalid", [None, [], (), "dict", 1, UserDict(a=1)])
 def test_requires_dict_arguments(invalid):
     with pytest.raises(TypeError):
+        merge(invalid)
+    with pytest.raises(TypeError):
         merge(invalid, {})
     with pytest.raises(TypeError):
         merge({}, invalid)
+    with pytest.raises(TypeError):
+        merge({}, {}, invalid)
 
 
 def test_keyword_only_options_and_inspectable_signature():
@@ -195,10 +199,123 @@ def test_keyword_only_options_and_inspectable_signature():
     with pytest.raises(TypeError):
         merge({}, {}, unknown=True)
     signature = inspect.signature(merge)
-    assert list(signature.parameters) == ["left", "right", "concat_lists"]
+    assert list(signature.parameters) == ["dicts", "concat_lists"]
+    assert signature.parameters["dicts"].kind == inspect.Parameter.VAR_POSITIONAL
     assert signature.parameters["concat_lists"].kind == inspect.Parameter.KEYWORD_ONLY
     assert signature.parameters["concat_lists"].default is False
-    assert merge(left={"a": 1}, right={"b": 2}) == {"a": 1, "b": 2}
+
+
+def test_zero_and_single_dict_inputs():
+    assert merge() == {}
+    assert merge(concat_lists=True) == {}
+
+    class DictSubclass(dict):
+        pass
+
+    class ListSubclass(list):
+        pass
+
+    source = DictSubclass(nested=DictSubclass(items=ListSubclass([DictSubclass(a=1)])))
+    copied = merge(source)
+    assert copied == {"nested": {"items": [{"a": 1}]}}
+    assert copied is not source
+    assert type(copied) is dict
+    assert type(copied["nested"]) is dict
+    assert type(copied["nested"]["items"]) is list
+    assert type(copied["nested"]["items"][0]) is dict
+    copied["nested"]["items"][0]["a"] = 99
+    assert source["nested"]["items"][0]["a"] == 1
+
+
+def test_variadic_merge_nested_lists_and_overrides():
+    defaults = {
+        "server": {"host": "localhost", "port": 8000, "tls": {"enabled": False}},
+        "plugins": ["logging"],
+        "broken": {"a": 1},
+        "keep": "base",
+    }
+    env = {
+        "server": {"port": 9000},
+        "plugins": ["auth"],
+        "broken": 42,
+        "env_only": {"x": [1]},
+    }
+    cli = {
+        "server": {"tls": {"enabled": True, "cert": "pem"}},
+        "plugins": ["metrics"],
+        "broken": {"b": 2},
+    }
+
+    assert merge(defaults, env, cli) == {
+        "server": {"host": "localhost", "port": 9000, "tls": {"enabled": True, "cert": "pem"}},
+        "plugins": ["metrics"],
+        "broken": {"b": 2},
+        "keep": "base",
+        "env_only": {"x": [1]},
+    }
+    result = merge(defaults, env, cli, concat_lists=True)
+    assert result["plugins"] == ["logging", "auth", "metrics"]
+    result["env_only"]["x"].append(2)
+    assert env["env_only"]["x"] == [1]
+
+
+def test_variadic_non_contiguous_and_broken_chains():
+    assert merge({"x": {"a": 1}}, {}, {"x": {"b": 2}}) == {"x": {"a": 1, "b": 2}}
+    assert merge({"x": [1]}, {}, {"x": [2]}, {"x": [3]}, concat_lists=True) == {"x": [1, 2, 3]}
+    assert merge({"x": [1]}, {"x": None}, {"x": [2]}, {"x": [3]}, concat_lists=True) == {
+        "x": [2, 3]
+    }
+    # Nested containers inside 3+ concatenated lists are independent copies.
+    a = {"x": [{"v": [1]}]}
+    b = {"x": [{"v": [2]}]}
+    c = {"x": [{"v": [3]}]}
+    merged = merge(a, b, c, concat_lists=True)
+    assert merged == {"x": [{"v": [1]}, {"v": [2]}, {"v": [3]}]}
+    for item in merged["x"]:
+        item["v"].clear()
+    assert (a, b, c) == ({"x": [{"v": [1]}]}, {"x": [{"v": [2]}]}, {"x": [{"v": [3]}]})
+
+
+def test_variadic_order_key_identity_and_overwritten_cycles():
+    class Key:
+        def __init__(self, name):
+            self.name = name
+
+        def __hash__(self):
+            return hash(self.name)
+
+        def __eq__(self, other):
+            return isinstance(other, Key) and self.name == other.name
+
+    k0, k1, k2 = Key("k"), Key("k"), Key("k")
+    result = merge({k0: 1, "a": 1}, {k1: 2, "b": 2}, {k2: 3, "c": 3})
+    assert list(result) == [k0, "a", "b", "c"]
+    assert list(result)[0] is k0
+    assert result[k0] == 3
+
+    cycle = {}
+    cycle["self"] = cycle
+    assert merge({"x": cycle}, {"y": 1}, {"x": 2}) == {"x": 2, "y": 1}
+    with pytest.raises(RecursionError):
+        merge(cycle)
+
+
+def test_variadic_container_subclasses_in_lists():
+    class ListSubclass(list):
+        def __iter__(self):
+            raise AssertionError("must use stored list elements")
+
+        def __getitem__(self, key):
+            raise AssertionError("must use native list access")
+
+    result = merge(
+        {"x": ListSubclass([1])},
+        {"x": ListSubclass([2])},
+        {"x": ListSubclass([3])},
+        concat_lists=True,
+    )
+    assert result == {"x": [1, 2, 3]}
+    assert type(result["x"]) is list
 
 
 @pytest.mark.parametrize("concat_lists", [False, True])
