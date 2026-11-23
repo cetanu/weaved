@@ -149,5 +149,60 @@
         "mergedeep_speedup": 11.926734648019854
       }
     }
+  },
+  {
+    "commit": "f5239624f441a4397675a339e680ede0c5183c13",
+    "date": "2026-11-23T01:00:22+00:00",
+    "benchmarks": {
+      "flat": {
+        "weave_seconds": 0.00043046999999774016,
+        "python_seconds": 0.0021528804999775275,
+        "speedup": 5.001232373890932,
+        "mergedeep_seconds": 0.0037507140000343497,
+        "mergedeep_speedup": 8.713067112816317
+      },
+      "wide mixed": {
+        "weave_seconds": 0.0003613355000027241,
+        "python_seconds": 0.002217865500000471,
+        "speedup": 6.137967346091792,
+        "mergedeep_seconds": 0.005326175500016461,
+        "mergedeep_speedup": 14.740249712459217
+      },
+      "medium mixed": {
+        "weave_seconds": 5.473499982144858e-06,
+        "python_seconds": 1.0846499975514234e-05,
+        "speedup": 1.9816388071429023,
+        "mergedeep_seconds": 1.2898999983690373e-05,
+        "mergedeep_speedup": 2.356627391206411
+      },
+      "subtree copy": {
+        "weave_seconds": 7.30454999882113e-05,
+        "python_seconds": 0.0008898684999962825,
+        "speedup": 12.182386322770013,
+        "mergedeep_seconds": 0.0009056694999856063,
+        "mergedeep_speedup": 12.398703549592662
+      },
+      "mixed subtree copy": {
+        "weave_seconds": 6.691100000466577e-05,
+        "python_seconds": 0.0008893890000081228,
+        "speedup": 13.292119381657798,
+        "mergedeep_seconds": 0.0009212414999808516,
+        "mergedeep_speedup": 13.76816218434357
+      },
+      "list replace": {
+        "weave_seconds": 3.2820000029687435e-05,
+        "python_seconds": 0.0006278089999796066,
+        "speedup": 19.128854339174893,
+        "mergedeep_seconds": 0.0007483809999939695,
+        "mergedeep_speedup": 22.80258986340704
+      },
+      "list concatenate": {
+        "weave_seconds": 6.535899998993955e-05,
+        "python_seconds": 0.0012676240000075722,
+        "speedup": 19.394788785059326,
+        "mergedeep_seconds": 0.0007593765000137864,
+        "mergedeep_speedup": 11.618545267379767
+      }
+    }
   }
 ]
